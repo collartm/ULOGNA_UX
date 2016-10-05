@@ -1,0 +1,30 @@
+
+Avertissement : Corps de package créé avec erreurs de compilation.
+
+Erreurs pour PACKAGE BODY PC_TR_RAMASSE_PKG :
+
+LINE/COL ERROR                                                                  
+-------- -----------------------------------------------------------------      
+341/5    PL/SQL: Statement ignored                                              
+341/5    PLS-00201: l'identificateur 'V_NO_CMD_EN_COURS' doit être déclaré      
+611/17   PL/SQL: Statement ignored                                              
+611/17   PLS-00201: l'identificateur 'V_NO_CMD_EN_COURS' doit être déclaré      
+614/17   PL/SQL: Statement ignored                                              
+616/57   PLS-00201: l'identificateur 'V_NO_CMD_EN_COURS' doit être déclaré      
+2255/9   PL/SQL: Statement ignored                                              
+2255/9   PLS-00201: l'identificateur 'V_SSCC_UT' doit être déclaré              
+2309/5   PL/SQL: Statement ignored                                              
+2309/51  PLS-00201: l'identificateur 'V_SSCC_UT' doit être déclaré              
+2310/5   PL/SQL: Statement ignored                                              
+
+LINE/COL ERROR                                                                  
+-------- -----------------------------------------------------------------      
+2310/5   PLS-00201: l'identificateur 'V_SSCC_UT' doit être déclaré              
+2311/5   PL/SQL: Statement ignored                                              
+2311/51  PLS-00201: l'identificateur 'V_SSCC_UT' doit être déclaré              
+2313/5   PL/SQL: Statement ignored                                              
+2313/54  PLS-00201: l'identificateur 'V_COD_UT_PAL' doit être déclaré           
+2315/5   PL/SQL: Statement ignored                                              
+2315/5   PLS-00201: l'identificateur 'V_COD_UT_PAL' doit être déclaré           
+2316/5   PL/SQL: Statement ignored                                              
+2316/5   PLS-00201: l'identificateur 'V_TYP_UT_PAL' doit être déclaré           

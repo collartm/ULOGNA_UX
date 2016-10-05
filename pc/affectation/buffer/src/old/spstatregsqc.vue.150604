@@ -1,0 +1,100 @@
+-- $Id$
+-- DESCRIPTION :
+-- -------------
+-- Vue pour analyse régulation entrée/sortie séquenceur               
+--
+-- HISTORIQUE DES MODIFICATIONS :
+-- -------------------------------------------------------------------------
+-- Ver,Date    ,Auteur Description
+-- -------------------------------------------------------------------------
+-- 01a,28.04.15,rbel   creation                                   
+-- -------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW V_SP_STAT_REG_SQC AS
+SELECT v.*, v2.*
+  FROM (SELECT u.no_uee,
+               p.cod_ops,
+               e.no_com,
+               e.dat_crea dat_crea_com,
+               e.dat_exp,
+               ut_sup.cod_ut cod_ut_sup,
+               u.no_uee_ut_p1,
+               u.dat_ordo,
+               u.dat_reg_av dat_reg_ent_sqc,
+               u.no_rmp no_sqc,
+               u.dat_pic_val dat_sortie_flexy,
+               (SELECT MAX (o.dat_crea)
+                  FROM se_ord_trf_arc o
+                 WHERE     typ_trf = 'PC_PIC'
+                       AND o.cod_mag_orig = 'SKSE'
+                       AND o.ref_trf_1 = p.cod_ops)
+                   dat_tir_rp_ent_sqc,
+               u.dat_ent_bff dat_ent_sqc,
+               u.dat_reg_ap dat_reg_sor_sqc,
+               u.dat_sor_bff dat_sor_sqc,
+               u.dat_lvzp dat_tir_robot,
+               ut_sup.dat_der_liv dat_der_tir_robot
+          FROM v_pc_uee_arc u, v_pc_ent_com_arc e, v_pc_ut_arc ut_sup,
+               v_pc_pic_uee_arc pu, v_pc_pic_arc p
+         WHERE su_bas_etat_val_num (etat_atv_pc_uee, 'PC_UEE') >= su_bas_etat_val_num ('CPAL', 'PC_UEE')
+               AND u.cod_pss_afc = 'SCC01'
+               AND e.no_com = u.no_com
+               AND ut_sup.cod_ut = u.cod_ut_sup
+               AND ut_sup.typ_ut = u.typ_ut_sup
+               AND pu.no_uee = u.no_uee
+               AND p.cod_pic = pu.cod_pic
+               AND pu.etat_actif = '1') v,
+       (SELECT o.ref_trf_1,
+               o.cod_emp_orig cod_emp_flexy,
+               l.cod_zone flexy,
+               o.cod_emp_dest cod_emp_sqc,
+               su_bas_gcl_se_emp (o.cod_emp_dest, 'COD_ALLEE') ascenseur_sqc,
+               LTRIM (o.ref_trf_2, '0') no_sqm,
+               LTRIM (o.ref_trf_3, '0') no_ord_sqm,
+               MAX (o.dat_crea) dat_crea_ord_sortie_flexy,
+               COUNT (DISTINCT cod_ut_orig) nb_ut_utilise
+            FROM se_ord_trf_arc o, se_lig_zone l
+           WHERE     o.typ_trf = 'PC_PIC'
+                 AND o.cod_mag_orig = 'SKC'
+                 AND l.cod_emp = o.cod_emp_orig
+                 AND l.typ_zone = 'MT'
+        GROUP BY o.ref_trf_1, o.cod_emp_orig, o.cod_emp_dest, o.ref_trf_2,
+                 o.ref_trf_3, l.cod_zone) v2
+ WHERE v2.ref_trf_1 = v.cod_ops
+UNION ALL
+SELECT 'I'||u.no_uee,
+                   NULL cod_ops,
+                   e.no_com,
+                   e.dat_crea dat_crea_com,
+                   e.dat_exp,
+                   ut_sup.cod_ut cod_ut_sup,
+                   NULL no_uee_ut_p1,
+                   NULL dat_ordo,
+                   NULL dat_reg_ent_sqc,
+                   u.no_rmp no_sqc,
+                   NULL dat_sortie_flexy,
+                   NULL dat_tir_rp_ent_sqc,
+                   NULL dat_ent_sqc,
+                   NULL dat_reg_sor_sqc,
+                   NULL dat_sor_sqc,
+                   u.dat_lvzp dat_tir_robot,
+                   ut_sup.dat_der_liv dat_der_tir_robot,
+                   NULL ref_trf_1,
+                   NULL cod_emp_flexy,
+                   NULL flexy,
+                   NULL cod_emp_sqc,
+                   NULL ascenseur_sqc,
+                   NULL no_sqm,
+                   NULL no_ord_sqm,
+                   NULL dat_crea_ord_sortie_flexy,
+                   NULL nb_ut_utilise
+              FROM v_pc_uee_arc u, v_pc_ent_com_arc e, v_pc_ut_arc ut_sup
+             WHERE     su_bas_etat_val_num (etat_atv_pc_uee, 'PC_UEE') >=
+                           su_bas_etat_val_num ('CPAL', 'PC_UEE')
+                   AND u.cod_pss_afc = 'SCC01'
+                   AND u.intercalaire IS NOT NULL
+                   AND e.no_com = u.no_com
+                   AND ut_sup.cod_ut = u.cod_ut_sup
+                   AND ut_sup.typ_ut = u.typ_ut_sup;
+/
+show errors;

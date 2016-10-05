@@ -1,0 +1,309 @@
+/* $Id$
+****************************************************************************
+* sp_pc_bas_chg_pss -    
+*
+*/
+-- DESCRIPTION :
+-- -------------
+-- Cette fonction permet d'effectuer le changement de process pour 
+-- la ligne de commande , les colis et les lignes de colis.
+--
+-- PARAMETRES :
+-- ------------
+--  p_cod_verrou
+--  p_cod_pss
+--  p_cod_atl
+--  p_no_uee : no du colis,  traiter,
+--             NULL pour traiter toute la ligne (colis interrompus ou non)          
+--             '*' pour traiter tous les colis interrompus (appel de PC_SOLDE)
+--
+-- HISTORIQUE DES MODIFICATIONS :
+-- -------------------------------------------------------------------------
+-- Ver,Date    ,Auteur  Description
+-- -------------------------------------------------------------------------
+-- 02,24.10.14,tjaf     Spec du prg pour prise en compte du mode débord
+-- 01f,15.04.14,mnev    Correction mise a jour des lignes non precolisees
+--                      -> manque jointure avec no_com !!!
+-- 01e,18.01.13,ncha	Ecriture dans le journal de préparation
+-- 01d,15.04.11,mnev    Gestion par curseur. Ajout test de qualification
+-- 01c,07.11.08,mnev    Correction sur UPDATE de LIG_COM
+-- 01b,04.08.08,mnev    Correction sur UPDATE de LIG_COM
+--                      Gestion du no_uee = '*' (tous les colis interrompus)
+-- 01a,21.09.07,JDRE    initialisation
+-- 00a,21.09.07,GENPRG  version 2.10
+-- -------------------------------------------------------------------------
+--
+-- RETOUR :
+-- --------
+--  OK ou ERROR ou code erreur
+--
+-- COMMIT :
+-- --------
+--   OUI
+
+CREATE OR REPLACE
+FUNCTION sp_pc_bas_chg_pss (p_cod_verrou                  VARCHAR2,
+                         p_cod_pss                     su_pss.cod_pss%TYPE,
+                         p_cod_atl                     su_atl.cod_atl%TYPE,
+                         p_no_uee                      pc_uee.no_uee%TYPE)
+RETURN VARCHAR2
+IS
+    v_version           su_ano_his.version%TYPE := '@(#) VERSION 02 $Revision$';
+    v_nom_obj           su_ano_his.nom_obj%TYPE := 'sp_pc_bas_chg_pss';
+    v_etape             su_ano_his.txt_ano%TYPE := 'Declare';
+    v_cod_err_su_ano    su_ano_his.cod_err_su_ano%TYPE := NULL;
+    err_except          EXCEPTION;
+    v_ret               VARCHAR2(100) := NULL;
+    v_session_ora       VARCHAR2(20)  := su_global_pkv.v_no_session_ora;
+
+	v_etat_atv_pc_lig_com su_action_atv.etat_atv%TYPE;
+
+    CURSOR c_uee IS 
+        SELECT d.no_uee,d.no_com,d.no_lig_com, 
+               d.cod_qlf_trv, c.typ_uee, c.cod_cnt, d.cod_vet
+          FROM pc_uee c,pc_uee_det d,pc_lig_com l
+         WHERE l.no_com=d.no_com
+           AND l.no_lig_com=d.no_lig_com
+           AND l.libre_pc_lig_com_12 IN ('1','2') -- SPEC
+           AND c.no_uee=d.no_uee
+           AND (NVL(p_no_uee,'#NULL#')='#NULL#' 
+                OR
+                (p_no_uee = '*' AND c.etat_atv_pc_uee = su_bas_rch_etat_atv('PREPARATION_INTERROMPUE','PC_UEE'))
+                OR
+                NVL(p_no_uee,'#NULL#')=c.no_uee)
+           AND INSTR(l.lst_fct_lock, p_cod_verrou) > 0 
+           AND l.id_session_lock=v_session_ora
+           AND (
+                (su_bas_etat_val_num(c.etat_atv_pc_uee,'PC_UEE') <= su_bas_etat_val_num('SEL_CHG_PROCESS','PC_UEE') AND NVL(p_no_uee,'?') <> '*')
+                OR
+                c.etat_atv_pc_uee = su_bas_rch_etat_atv('PREPARATION_INTERROMPUE','PC_UEE')
+                )
+        ORDER BY d.no_com, d.no_lig_com; 
+
+    r_uee c_uee%ROWTYPE;
+
+    CURSOR c_lig_non_preco(x_etat_atv su_action_atv.etat_atv%TYPE) IS 
+        SELECT no_lig_com, no_com, cod_qlf_trv
+        FROM pc_lig_com
+        WHERE INSTR(lst_fct_lock, p_cod_verrou) > 0 
+            AND id_session_lock=v_session_ora
+            AND libre_pc_lig_com_12 IN ('1','2') -- SPEC
+            AND etat_pcl = '0' 
+            AND (etat_atv_pc_lig_com = x_etat_atv OR NVL(p_no_uee,'*') = '*');
+		
+		
+    v_last_no_com pc_lig_com.no_com%TYPE := 0;
+    v_last_no_lig pc_lig_com.no_lig_com%TYPE := 0;
+    v_updt_no_com pc_lig_com.no_com%TYPE := 0;
+    v_updt_no_lig pc_lig_com.no_lig_com%TYPE := 0;
+
+    vr_lig_com    pc_lig_com%ROWTYPE;
+    v_maj_ligne   VARCHAR2(5) := 'NON';
+  
+BEGIN
+
+    SAVEPOINT my_pc_bas_chg_pss;
+
+    v_etape := 'Trace';
+    IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : cod_verrou = '  || p_cod_verrou
+                                  ||' : cod_pss = '     || p_cod_pss
+                                  ||' : cod_atl = '     || p_cod_atl
+                                  ||' : no_uee = '      || p_no_uee);
+    END IF;
+
+    v_etape := 'open c_uee';
+	v_etat_atv_pc_lig_com := su_bas_rch_etat_atv ('PREPARATION_INTERROMPUE','PC_LIG_COM');
+    OPEN c_uee;
+    LOOP
+        FETCH c_uee INTO r_uee;
+
+    IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 1 - '||v_etape);
+    END IF;
+
+        IF c_uee%NOTFOUND THEN
+            IF (v_updt_no_com <> v_last_no_com OR v_updt_no_lig <> v_last_no_lig) AND v_maj_ligne = 'OUI' THEN
+                v_etape := 'derniere mise à jour PC_LIG_COM';
+
+IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 2 - '||v_etape);
+    END IF;
+
+                UPDATE pc_lig_com
+                   SET cod_pss_afc=p_cod_pss,
+                       cod_atl_prp=p_cod_atl
+                  WHERE INSTR(lst_fct_lock, p_cod_verrou) > 0 
+                       AND id_session_lock=v_session_ora
+                       AND no_com = v_last_no_com AND no_lig_com = v_last_no_lig
+                       AND (etat_atv_pc_lig_com = v_etat_atv_pc_lig_com OR NVL(p_no_uee,'*') = '*');			 											 
+
+                v_ret := pc_bas_cre_pc_his( p_typ		=> 'COM',
+                                            p_cle1	=> v_updt_no_com,
+                                            p_cle2	=> v_updt_no_lig,
+                                            p_act		=> 'PC_HIS_CHGT_RED_PSS',
+                                            p1			=> p_cod_pss,
+                                            p2			=> p_cod_atl,
+                                            p3			=> vr_lig_com.cod_qlf_trv,
+                                            p4			=> 'UEE : ' || p_no_uee);			-- $MOD NCHA 01e
+
+                IF su_global_pkv.v_niv_dbg >= 6 THEN
+                    su_bas_put_debug(v_nom_obj||' MAJ pc_lig_com ' || v_last_no_com || '-' || TO_CHAR(v_last_no_lig));
+                END IF;
+            END IF;
+            EXIT;
+        END IF;
+
+        -- 
+        IF v_last_no_com <> r_uee.no_com OR v_last_no_lig <> r_uee.no_lig_com THEN
+            v_etape := 'Lecture row lig_com';
+
+IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 3 - '||v_etape);
+    END IF;
+
+            vr_lig_com := su_bas_grw_pc_lig_com (p_no_com     => r_uee.no_com,
+                                                 p_no_lig_com => r_uee.no_lig_com);
+
+            IF (v_updt_no_com <> v_last_no_com OR v_updt_no_lig <> v_last_no_lig) AND v_maj_ligne = 'OUI' THEN
+
+                v_etape := 'Mise à jour PC_LIG_COM';
+
+IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 4 - '||v_etape);
+    END IF;
+
+                UPDATE pc_lig_com
+                   SET cod_pss_afc=p_cod_pss,
+                       cod_atl_prp=p_cod_atl
+                  WHERE INSTR(lst_fct_lock, p_cod_verrou) > 0 
+                       AND id_session_lock=v_session_ora
+                       AND no_com = v_last_no_com AND no_lig_com = v_last_no_lig
+                       AND (etat_atv_pc_lig_com = v_etat_atv_pc_lig_com OR NVL(p_no_uee,'*') = '*');
+
+                v_ret := pc_bas_cre_pc_his(p_typ	=> 'COM',
+                                           p_cle1	=> v_updt_no_com,
+                                           p_cle2	=> v_updt_no_lig,
+                                           p_act	=> 'PC_HIS_CHGT_RED_PSS',
+                                           p1		=> p_cod_pss,
+                                           p2		=> p_cod_atl,
+                                           p3		=> vr_lig_com.cod_qlf_trv,
+                                           p4		=> 'UEE : ' || p_no_uee);			-- $MOD NCHA 01e														
+
+                IF su_global_pkv.v_niv_dbg >= 6 THEN
+                    su_bas_put_debug(v_nom_obj||' MAJ pc_lig_com ' || v_last_no_com || '-' || TO_CHAR(v_last_no_lig));
+                END IF;
+
+                -- nouvelle ligne 
+                v_updt_no_com := v_last_no_com;
+                v_updt_no_lig := v_last_no_lig;
+
+            END IF;
+
+            v_maj_ligne   := 'NON';
+            v_last_no_com := r_uee.no_com;
+            v_last_no_lig := r_uee.no_lig_com;
+
+        END IF;
+
+        -- mise a jour des données issues du colis ...
+        vr_lig_com.cod_qlf_trv    := r_uee.cod_qlf_trv;
+        vr_lig_com.typ_col        := r_uee.typ_uee;
+        vr_lig_com.cod_cnt_col    := r_uee.cod_cnt;
+        vr_lig_com.cod_vet        := r_uee.cod_vet;
+
+        v_etape := 'controle qualif pss';
+
+IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 5 - '||v_etape);
+    END IF;
+
+        IF su_bas_tst_qlf_pss (pr_lig_com    =>vr_lig_com,
+                               p_cod_qlf     =>p_cod_pss,
+                               p_cle_rch_qlf =>'RED') = 'TRUE' THEN  -- {
+
+            IF su_global_pkv.v_niv_dbg >= 6 THEN
+                su_bas_put_debug(v_nom_obj||' qualif OK process : ' || p_cod_pss);
+            END IF;
+
+            v_etape := 'MAJ pc_uee';
+            UPDATE pc_uee SET 
+                cod_pss_afc=p_cod_pss,
+                cod_atl_prp=p_cod_atl
+            WHERE no_uee = r_uee.no_uee;
+
+            v_etape := 'MAJ pc_uee_det';
+            UPDATE pc_uee_det SET
+                cod_pss_afc=p_cod_pss,
+                cod_atl_prp=p_cod_atl
+            WHERE no_uee = r_uee.no_uee AND no_com = r_uee.no_com AND no_lig_com = r_uee.no_lig_com;
+
+            v_maj_ligne := 'OUI';
+
+
+            IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 6 - '||v_etape);
+    END IF;
+
+        END IF;
+
+    END LOOP;
+    CLOSE c_uee;
+
+    --
+    -- On met à jour les lig_com non précolisees
+    --
+    v_etape := 'Mise à jour PC_LIG_COM ';
+    FOR r_lig_non_preco IN c_lig_non_preco(v_etat_atv_pc_lig_com)	
+    LOOP
+
+IF su_global_pkv.v_niv_dbg >= 3 THEN
+        su_bas_put_debug(v_nom_obj||' : etape 7 - '||v_etape);
+    END IF;
+
+        UPDATE pc_lig_com SET 
+            cod_pss_afc=p_cod_pss,
+            cod_atl_prp=p_cod_atl
+        WHERE no_com = r_lig_non_preco.no_com AND no_lig_com = r_lig_non_preco.no_lig_com;
+
+        v_ret := pc_bas_cre_pc_his( p_typ		=> 'COM',
+                                    p_cle1	=> r_lig_non_preco.no_com,
+                                    p_cle2	=> r_lig_non_preco.no_lig_com,
+                                    p_act		=> 'PC_HIS_CHGT_RED_PSS',
+                                    p1			=> p_cod_pss,
+                                    p2			=> p_cod_atl,
+                                    p3			=> r_lig_non_preco.cod_qlf_trv,
+                                    p4			=> 'UEE : ' || p_no_uee);			   
+                                                                    
+    END LOOP;
+		
+    COMMIT;
+    
+    RETURN 'OK';
+
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK TO my_pc_bas_chg_pss;
+        su_bas_cre_ano (p_txt_ano         => 'EXCEPTION : ' || v_etape,
+                        p_cod_err_ora_ano => SQLCODE,
+                        p_lib_ano_1       => 'verrou',
+                        p_par_ano_1       => p_cod_verrou,
+                        p_lib_ano_2       => 'cod_pss',
+                        p_par_ano_2       => p_cod_pss,
+                        p_lib_ano_3       => 'cod_atl',
+                        p_par_ano_3       => p_cod_atl,
+                        p_lib_ano_4       => 'no_uee',
+                        p_par_ano_5       => p_no_uee,
+                        p_cod_err_su_ano  => v_cod_err_su_ano,
+                        p_nom_obj         => v_nom_obj,
+                        p_version         => v_version);
+        IF v_ret='OK' OR v_ret IS null OR v_ret = 'ERROR' THEN
+            RETURN NVL(v_cod_err_su_ano,'ERROR');
+        ELSE
+            RETURN v_ret;
+        END IF;
+END;
+/
+show errors;
+
+exit;

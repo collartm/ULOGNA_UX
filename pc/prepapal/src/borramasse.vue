@@ -1,0 +1,63 @@
+-- $Id$
+-- DESCRIPTION :
+-- -------------
+-- Ces vues sont utilisees par le terminal radio en process ramasse.
+--
+-- HISTORIQUE DES MODIFICATIONS :
+-- -------------------------------------------------------------------------
+-- Ver,Date    ,Auteur Description
+-- -------------------------------------------------------------------------
+-- 03a,13.02.14,pluc   Spec. SUO : aff. emplacement de stock débord.
+--                     L'affectation produit-emplacement de débord n'est pas effectué
+--                     systématiquement lors de création du bordereau.
+-- 02b,20.03.14,rbel   Champ état basé sur les Pc_PIC à cause des validations temporaires
+-- 02a,05.11.12,mnev   Change la vue de redirection process pour utiliser
+--                     la cle de config ORD.LST_PSS_RPL.
+-- 01b,11.04.11,alfl   suppression champ libre 
+-- 01a,25.02.10,rleb   version initiale
+-- -------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW v_det_bor_ramasse  AS
+SELECT p.no_bor_pic, 
+       --p.cod_emp, 
+       NVL(( SELECT MAX(s.cod_emp) KEEP (DENSE_RANK FIRST ORDER BY qte_unit_1) --emplacement qui est le max order qte
+         FROM   se_stk s
+         WHERE  s.cod_pro = p.cod_pro
+         AND    s.cod_mag = 'SPD'          -- débord
+         AND    s.qte_unit_1 > 0)
+         , 'REA EN COURS') cod_emp,
+       p.cod_pro,
+       p.cod_pss_afc, 
+       SUM(su_bas_conv_unite_to_one_sel (p.cod_pro, p.cod_vl, p.qte_a_pic, p.unite_qte, 'C')) nb_col_theo, 
+       SUM(su_bas_conv_unite_to_one_sel (p.cod_pro, p.cod_vl, p.qte_pic, p.unite_qte, 'C')) nb_col_val,
+       SUM(d.pds_theo) pds_tot,
+       SUM(d.vol_theo) vol_tot,
+       --DECODE (SIGN(SU_BAS_ETAT_VAL_NUM('TEST_FIN_PREPA','PC_UEE_DET') - MIN(SU_BAS_ETAT_VAL_NUM(d.etat_atv_pc_uee_det,'PC_UEE_DET'))),1,'>','T') etat,  --il faut se baser sur ples pc_pic pour le cas des validations temporaires
+       DECODE (SIGN (su_bas_etat_val_num ('VALIDE', 'PC_PIC') - MIN (su_bas_etat_val_num (p.etat_atv_pc_pic, 'PC_PIC'))), 1, '>','T') etat,  
+       0 etat_couche_complete
+       FROM pc_pic p, pc_pic_uee pu, pc_uee_det d
+WHERE p.cod_pic = pu.cod_pic
+  AND pu.etat_actif = '1'
+  AND d.no_uee = pu.no_uee
+  AND d.no_com = pu.no_com
+  AND d.no_lig_com = pu.no_lig_com
+  GROUP BY p.no_bor_pic, p.cod_emp, p.cod_pro, p.cod_pss_afc 
+ORDER BY p.no_bor_pic
+/
+show errors;
+
+--
+-- liste des process autorisés pour recycler les manquants
+--
+CREATE OR REPLACE VIEW V_PN1_PC_RAM_LOV_PSS AS
+SELECT cod_pss, lib_pss
+  FROM TABLE (
+          pc_pss_rpl_pkg.pc_bas_pss_rpl (p_no_uee   => NULL,
+                                         p_cod_ut   => NULL,
+                                         p_typ_ut   => NULL, 
+                                         p_m_117 => 'RM'))
+/
+
+/
+show errors;
+

@@ -1,0 +1,137 @@
+/* $Id$
+****************************************************************************
+* pc_bas_get_color_elm_up - rch color elm up
+*/
+-- DESCRIPTION :
+-- -------------
+-- Cette fonction permet de retourner une couleur pour un  élément UP
+--
+-- ATTENTION ! peut être appelée dans un select
+--
+-- PARAMETRES :
+-- ------------
+--  - commande
+--  - lig com
+--  - produit
+--  - couleur par défaut
+--
+-- HISTORIQUE DES MODIFICATIONS :
+-- -------------------------------------------------------------------------
+-- Ver,Date    ,Auteur  Description
+-- -------------------------------------------------------------------------
+--
+-- 01a,24.09.13,tcho    création
+-- 00a,08.09.06,GENMPD  version 2.7
+-- -------------------------------------------------------------------------
+--
+-- RETOUR :
+-- --------
+--  code couleur
+--
+-- COMMIT :
+-- --------
+--   NON
+
+CREATE OR REPLACE
+FUNCTION pc_bas_get_color_elm_up (p_no_com varchar2 DEFAULT NULL,
+                                  p_no_lig number default null,
+                                  p_cod_pro varchar2 default null,
+                                  p_col_def varchar2 default null,
+                                  p_typ_up varchar2 default null,
+                                  p_cod_up  varchar2 default null  )
+RETURN VARCHAR2 deterministic
+IS
+--    v_version           su_ano_his.version%TYPE := '@(#) VERSION 01a $Revision$';
+--    v_nom_obj           su_ano_his.nom_obj%TYPE := 'pc_bas_get_color_elm_up';
+--    v_etape             su_ano_his.txt_ano%TYPE := 'Declare';
+--    v_cod_err_su_ano    su_ano_his.cod_err_su_ano%TYPE := NULL;
+--    err_except          EXCEPTION;
+
+    v_ret varchar2(100);
+
+    v_pos number;
+    v_tmp number;
+    v_tmp2 number;
+
+    /* SYSTEM U : connaitre le nombre de "couches" */
+    cursor c_stack is
+        select count(distinct nvl(cle_rgp_pal_pref_A_1,'#')) nb,
+               min(cle_rgp_pal_pref_A_1) cod_stack_min,
+               max(cle_rgp_pal_pref_A_1) cod_stack_max,
+               min(decode(l.cod_pro,p_cod_pro,cle_rgp_pal_pref_A_1,null)) cod_stack_pro
+        from pc_lig_com l,pc_uee_det d,pc_uee e
+        where l.no_com=d.no_com
+           and l.no_lig_com=d.no_lig_com
+           and d.no_uee=e.no_uee
+          and e.typ_up=p_typ_up
+          and e.cod_up=p_cod_up;
+
+   r_stack c_stack%ROWTYPE;
+
+   cursor c_cnt is
+      select cod_stack
+      from su_cnt
+      where cod_cnt=p_cod_pro;
+
+    r_cnt c_cnt%ROWTYPE;
+
+BEGIN
+
+    /* standard */
+    v_ret := p_col_def;
+
+--          v_ret:= su_bas_get_hash_color2(p_cod_pro,0.8,0.8);
+
+    /* SPECIF SYSTEM U  */
+
+    open c_stack;
+    fetch c_stack into r_stack;
+    close c_stack;
+
+    if r_stack.nb >1 then -- uniquement si plusieurs couches
+        -- recup des 3 derniers chiffres pour faire une couleur
+        v_pos:=-3;
+        if substr(p_cod_pro,-1)='*' then -- promo
+            v_pos:=v_pos-1;
+        end if;
+        if substr(p_cod_pro,v_pos+1,1)='-' then  -- vieilles version
+            v_pos:=v_pos-2;
+        end if;
+        v_tmp :=round(nvl(su_bas_to_number(substr(p_cod_pro,v_pos,3))/1000,1)*192);
+        v_tmp2 :=nvl(su_bas_to_number(substr(p_cod_pro,v_pos-3,3))/1000,0);
+        v_tmp2:=round(v_tmp+v_tmp*(v_tmp2-0.5)*0.3);
+
+        -- rgb / couche
+        if nvl(r_stack.cod_stack_min,'#')=nvl(r_stack.cod_stack_pro,'#') then
+            v_ret := 'r255g'||v_tmp||'b'||v_tmp2;
+        elsif nvl(r_stack.cod_stack_max,'#')=nvl(r_stack.cod_stack_pro,'#') then
+            v_ret := 'r'||v_tmp||'g'||v_tmp2||'b255';
+        elsif r_stack.nb=3 then
+            v_ret := 'r'||v_tmp||'g255b'||v_tmp2;
+        elsif r_stack.nb=4 then -- gris pour stacks milieu
+            v_ret := 'r'||v_tmp||'g'||v_tmp||'b'||v_tmp2;
+        end if;
+
+
+    end if;
+
+    open c_cnt;
+    fetch c_cnt into r_cnt;
+    close c_cnt;
+
+    if r_cnt.cod_stack='9' then -- produit fragile
+        if v_ret is null then
+            v_ret:= su_bas_get_hash_color(p_cod_pro,0.5);
+        end if;
+        v_ret:=v_ret||'-'||v_ret||'-r255g255b255,x=2,y=2,f=0.5';   -- gradient
+    end if;
+
+    RETURN v_ret;
+
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN null;
+END;
+/
+show errors;
+

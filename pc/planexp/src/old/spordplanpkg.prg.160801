@@ -1,0 +1,292 @@
+CREATE OR REPLACE PACKAGE BODY SUDB.sp_ord_plan_pkg AS
+
+function uee_exists(p_no_uee varchar2) return integer
+is
+begin
+  if vt_ord.exists(p_no_uee) then return 1;  end if;
+  return 0;
+end;
+
+
+/* $Id$
+****************************************************************************
+* su_bas_tab_get_ord - retourne n° d'ordre de colis
+*/
+-- DESCRIPTION :
+-- -------------
+-- Cette procédure permet de retourner un n° d'ordre de colis pour essayer
+-- de faire des couches mono-hauteur
+--
+-- UTILISATION :
+-- ------------
+--    select t.* from table(se_bas_tab_dyn_stk) t;
+--
+-- HISTORIQUE DES MODIFICATIONS :
+-- ------------------------------
+-- ---------------------------------
+-- Ver,Date    ,Auteur Description
+-- ---------------------------------
+--
+-- 01a,20.07.10,TCHO   Création
+-- 00a,17.03.05,GENMPD version 2.1
+-- -----------------
+--
+-- COMMIT :
+-- --------
+--   NON
+
+--
+
+FUNCTION su_bas_tab_get_ord(
+    p_no_uee        pc_uee.no_uee%TYPE,
+    p_no_session    number,
+    p_cod_up        pc_up.cod_up%TYPE,
+    p_cle           timestamp      -- toujours mettre systimestamp
+    )
+return integer
+IS
+--    v_version           VARCHAR2(50)  := '@(#) VERSION 01a $Revision$';
+--    v_nom_obj           VARCHAR2(50)  := 'su_bas_tab_get_ord';
+--    v_etape             VARCHAR2(100) := 'Declare';
+--    v_cod_err_su_ano    VARCHAR2(20)  := NULL;
+--    err_except          EXCEPTION;
+
+   v_surf_tot number;
+   v_surf_cou number;
+   v_no_ord   number;
+   SURF_PAL   number:=1200*800;
+   SURF_SEUIL number:=1200*800*(su_bas_to_number(su_bas_rch_par_usn ('SU_CUBE_IQ_PCT_LAYER','S'))/100); -- surface * pct de remplissage
+   DIFF_HAUT  number:=su_bas_to_number(su_bas_rch_par_usn ('SU_CUBE_IQ_MAX_DIFF_HAUT_COU','S'))/2; -- différence de hauteur / 2
+   v_haut_max number;
+   v_haut     number;
+
+   cursor c_uee0 is
+      select p.haut_std
+      from pc_uee e,pc_uee_det d,pc_lig_com l,pc_cfg_pal p
+      where e.no_uee=d.no_uee
+        and l.no_com=d.no_com
+        and l.no_lig_com=d.no_lig_com
+        and l.cod_cfg_pal_1=p.cod_cfg_pal
+        and e.no_uee=p_no_uee;
+
+   cursor c_uee1 is
+     select distinct e.cod_pss_afc,L.cle_rgp_pal_pref_a_1
+     from (select no_uee,cod_pss_afc
+              from pc_uee
+              where id_session_lock=p_no_session
+                and cod_up is null
+              union all
+            select no_uee,cod_pss_afc
+              from pc_uee
+              where cod_up=p_cod_up
+                     )e,pc_uee_det d,pc_lig_com l
+     where e.no_uee=D.NO_UEE
+       and d.no_com=l.no_com
+       and d.no_lig_com=l.no_lig_com;
+
+   cursor c_uee2(x_pss varchar2,x_pref varchar2,p_order integer default 0,p_surf_min number default 0) is
+     select * from (
+     select c.haut_cnt_plein haut,
+           (select sum(larg_cnt*long_cnt)
+             from (select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where id_session_lock=p_no_session
+                and cod_up is null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+              union all
+            select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where cod_up=p_cod_up
+                and cod_up is not null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+                     )e2,pc_uee_det d2,pc_lig_com l2,su_cnt c2
+             where e2.no_uee=D2.NO_UEE
+               and d2.no_com=l2.no_com
+               and d2.no_lig_com=l2.no_lig_com
+               and e2.cod_cnt=c2.cod_cnt
+               and nvl(l2.CLE_RGP_PAL_PREF_A_1,'#NULL#')=x_pref
+               and c2.haut_cnt_plein between c.haut_cnt_plein-DIFF_HAUT and c.haut_cnt_plein+DIFF_HAUT)   surf
+    from (
+    select distinct c.haut_cnt_plein
+     from (select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where id_session_lock=p_no_session
+                and cod_up is null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+              union all
+            select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where cod_up=p_cod_up
+                and cod_up is not null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+                     )e,pc_uee_det d,pc_lig_com l,su_cnt c
+     where e.no_uee=D.NO_UEE
+       and d.no_com=l.no_com
+       and d.no_lig_com=l.no_lig_com
+       and e.cod_cnt=c.cod_cnt
+       and nvl(l.CLE_RGP_PAL_PREF_A_1,'#NULL#')=x_pref ) c
+     ) where surf>=p_surf_min
+--     order by 2 desc,1;
+    order by surf*p_order, -- si p_order <0 => prendre les hauteurs les moins susceptibles de faire des couches
+             haut desc;    -- dans l'ordre des hauteurs pour maximiser le nombre de couches
+
+    r_uee2 c_uee2%ROWTYPE;
+/*
+   cursor c_uee3(x_pss varchar2,x_pref varchar2,x_haut number) is
+    select sum(long_cnt*larg_cnt) surf
+     from (select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where id_session_lock=p_no_session
+                and cod_up is null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+              union all
+            select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where cod_up=p_cod_up
+                and cod_up is not null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+                     )e,pc_uee_det d,pc_lig_com l,su_cnt c
+     where e.no_uee=D.NO_UEE
+       and d.no_com=l.no_com
+       and d.no_lig_com=l.no_lig_com
+       and e.cod_cnt=c.cod_cnt
+       and nvl(l.CLE_RGP_PAL_PREF_A_1,'#NULL#')=x_pref
+       and c.haut_cnt_plein between x_haut-DIFF_HAUT and x_haut+DIFF_HAUT
+     ;
+*/
+   cursor c_uee4(x_pss varchar2,x_pref varchar2,x_haut number) is
+    select e.no_uee,e.cod_pss_afc,L.cle_rgp_pal_pref_a_1,c.haut_cnt_plein haut,long_cnt*larg_cnt surf
+     from (select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where id_session_lock=p_no_session
+                and cod_up is null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+              union all
+            select no_uee,cod_pss_afc,cod_cnt
+              from pc_uee
+              where cod_up=p_cod_up
+                and cod_up is not null
+                and cod_pss_afc=x_pss
+                and sp_ord_plan_pkg.uee_exists(no_uee)=0
+                     )e,pc_uee_det d,pc_lig_com l,su_cnt c
+     where e.no_uee=D.NO_UEE
+       and d.no_com=l.no_com
+       and d.no_lig_com=l.no_lig_com
+       and e.cod_cnt=c.cod_cnt
+       and nvl(l.cle_rgp_pal_pref_a_1,'#NULL#')=x_pref
+       and (x_haut is null or c.haut_cnt_plein between x_haut-DIFF_HAUT and x_haut+DIFF_HAUT)
+     order by /*abs(c.haut_cnt_plein-x_haut),*/
+              haut desc, -- dans l'ordre des hauteurs pour maximiser le nombre de couches
+              e.no_uee
+     ;
+
+
+BEGIN
+    if g_cle is null or p_cle != g_cle then -- nouvelle requête
+        if su_global_pkv.v_niv_dbg>=9 then
+            su_bas_put_debug('su_bas_tab_get_ord : cle='||p_cle||' UEE='||p_no_uee||' Session='||p_no_session||' UP='||p_cod_up||' SURF='||SURF_PAL);
+        end if;
+        vt_ord.delete;
+        v_no_ord:=0;
+        g_cle:=p_cle;
+
+        -- rch info hauteur max palette
+        open c_uee0;
+        fetch c_uee0 into v_haut_max;
+        close c_uee0;
+
+        -- par process / préférence
+        for r_uee1 in c_uee1
+        loop
+            if su_global_pkv.v_niv_dbg>=9 then
+                su_bas_put_debug('su_bas_tab_get_ord : PSS='||r_uee1.cod_pss_afc||' Pref='||r_uee1.cle_rgp_pal_pref_a_1);
+            end if;
+            loop
+                if su_global_pkv.v_niv_dbg>=9 then
+                    su_bas_put_debug('su_bas_tab_get_ord : Haut max='||v_haut_max);
+                end if;
+                -- rch de la hauteur pivot
+                r_uee2:=null;
+                open c_uee2(r_uee1.cod_pss_afc,r_uee1.cle_rgp_pal_pref_a_1,0,SURF_SEUIL);
+/*                loop
+                    r_uee2:=null;
+                      fetch c_uee2 into r_uee2;
+/*                    v_surf_tot:=0;
+                    exit when c_uee2%NOTFOUND;
+
+                    exit when r_uee2.nb<=3; -- dès qu'il reste - de 3 colis on peut sortir
+
+                    -- rch de la surface totale
+                    open c_uee3(r_uee1.cod_pss_afc,r_uee1.cle_rgp_pal_pref_a_1,r_uee2.haut);
+                    fetch c_uee3 into v_surf_tot;
+                    close c_uee3;
+*/
+                    v_surf_tot:=r_uee2.surf;
+                    if su_global_pkv.v_niv_dbg>=9 then
+                        su_bas_put_debug('su_bas_tab_get_ord : Surf ='||v_surf_tot||' Haut '||r_uee2.haut);
+                    end if;
+/*
+                    -- sortie si plus d'une couche
+                    exit when v_surf_tot>=SURF_SEUIL;
+                    -- sortie si moins d'1/4 couche
+                    exit when v_surf_tot<=SURF_PAL/4;
+                end loop;
+*/                close c_uee2;
+
+                -- sortie si moins d'une couche
+                exit when v_surf_tot<SURF_SEUIL or v_surf_tot is null;
+                v_surf_cou:=0;
+                if su_global_pkv.v_niv_dbg>=9 then
+                    su_bas_put_debug('su_bas_tab_get_ord : N° ord='||v_no_ord);
+                end if;
+                v_haut:=0;
+                for r_uee4 in c_uee4(r_uee1.cod_pss_afc,r_uee1.cle_rgp_pal_pref_a_1,r_uee2.haut)
+                loop
+                    if (v_surf_cou+r_uee4.surf<=SURF_PAL) then -- si on de dépasse pas 1 couche
+                        v_surf_cou:=v_surf_cou+r_uee4.surf;
+                        if r_uee2.haut>v_haut then
+                            v_haut:=r_uee2.haut;
+                        end if;
+                        vt_ord(r_uee4.no_uee):=v_no_ord;
+                    end if;
+                end loop;
+                v_no_ord:=v_no_ord+1;
+                v_haut_max:=v_haut_max-v_haut;
+                exit when v_haut_max<400; -- on s'arrête dès que près de la limite
+                exit when v_no_ord>100000; -- sortie de secours
+
+            end loop;
+
+            -- ceux qui restent : mettre ceux qui feront potentiellement le moins de couche pour compléter la palette
+            if su_global_pkv.v_niv_dbg>=9 then
+                su_bas_put_debug('su_bas_tab_get_ord : FIN surf '||v_surf_tot);
+            end if;
+            v_no_ord:=v_no_ord+1000; -- faire un trou pour mieux les identifier
+            v_haut:=0;
+            for r_uee2 in c_uee2(r_uee1.cod_pss_afc,r_uee1.cle_rgp_pal_pref_a_1,-1)  -- ordre inverse
+            loop
+                for r_uee4 in c_uee4(r_uee1.cod_pss_afc,r_uee1.cle_rgp_pal_pref_a_1,r_uee2.haut)
+                loop
+                    vt_ord(r_uee4.no_uee):=v_no_ord;
+                end loop;
+                v_no_ord:=v_no_ord+1;
+            end loop;
+        end loop;
+
+    end if;
+    if vt_ord.exists(p_no_uee) then
+       return  vt_ord(p_no_uee);
+    end if;
+    return 99999999999;
+END;
+
+END;
+/
+
